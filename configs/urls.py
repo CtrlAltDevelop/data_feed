@@ -1,8 +1,8 @@
 """
-URL configuration for configs project.
+URL configuration for configure the project.
 
 The `urlpatterns` list routes URLs to views. For more information please see:
-    https://docs.djangoproject.com/en/5.2/topics/http/urls/
+    https://docs.djangoproject.com/en/5.1/topics/http/urls/
 Examples:
 Function views
     1. Add an import:  from my_app import views
@@ -14,9 +14,29 @@ Including another URLconf
     1. Import the include() function: from django.urls import include, path
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
-# from django.contrib import admin
+from django.conf import settings
+from django.contrib import admin
 from django.urls import path
+from django.conf.urls.static import static
+
+from configs.api import api_v1
+
+
+from django.contrib import admin
+from django.contrib.admin.utils import display_for_field as original_display_for_field
+import django.contrib.admin.templatetags.admin_list
+
+def patched_display_for_field(value, field, empty_value_display, **kwargs):
+    return original_display_for_field(value, field, empty_value_display)
+
+django.contrib.admin.templatetags.admin_list.display_for_field = patched_display_for_field
+
 
 urlpatterns = [
-    #    path('admin/', admin.site.urls),
+    path('admin/', admin.site.urls),
+    path("api/v1/", api_v1.urls),  # Mount the Ninja API
 ]
+
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)

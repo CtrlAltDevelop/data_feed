@@ -1,6 +1,6 @@
 ├── apps/               # Your Django Ninja API application (contains app-specific logic)
-├── common/             # Common utilities, shared functions, and reusable components
-├── config/             # Django project configuration and settings
+├── commons/             # Common utilities, shared functions, and reusable components
+├── configs/             # Django project configuration and settings
 │   ├── __init__.py     # Marks the directory as a Python module
 │   ├── admin.py        # Admin panel configuration
 │   ├── api.py          # API router configuration for Django Ninja
