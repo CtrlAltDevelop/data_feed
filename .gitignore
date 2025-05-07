@@ -176,4 +176,4 @@ cython_debug/
 
 # ignore statics files
 statics/
-media/
+medias/

@@ -65,9 +65,14 @@ This project provides a RESTful API for managing and serving data feeds using Dj
    python manage.py createsuperuser
    ```
 
-7. Run the development server:
+7. Collect a statics files for run
    ``` bash
-   uvicorn configs.asgi:application --host localhost --port 8000 --reload --workers 8 --env-file .env
+   py manage.py collectstatic
+   ```
+
+8. Run the development server:
+   ``` bash
+   uvicorn configs.asgi:application --host localhost --port 8000 --reload
    ```
 
 ---

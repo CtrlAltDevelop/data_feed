@@ -18,6 +18,7 @@ from django.conf import settings
 from django.contrib import admin
 from django.urls import path
 from django.conf.urls.static import static
+from django.views.generic import RedirectView
 
 from configs.api import api_v1
 
@@ -35,6 +36,7 @@ django.contrib.admin.templatetags.admin_list.display_for_field = patched_display
 urlpatterns = [
     path('admin/', admin.site.urls),
     path("api/v1/", api_v1.urls),  # Mount the Ninja API
+    path('favicon.ico', RedirectView.as_view(url=f'{settings.STATIC_URL}/favicon.ico', permanent=True)),
 ]
 
 if settings.DEBUG:

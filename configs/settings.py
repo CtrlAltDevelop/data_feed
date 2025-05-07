@@ -24,7 +24,7 @@ from .jazzmin import JAZZMIN_SETTINGS, JAZZMIN_UI_TWEAKS
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-for folder in ('logs', 'static', 'medias'):
+for folder in ('logs', 'statics', 'medias'):
     (BASE_DIR / folder).mkdir(parents=True, exist_ok=True)
 
 
@@ -104,9 +104,9 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 MEDIA_URL = 'medias/'
-STATIC_URL = 'static/'
+STATIC_URL = 'statics/'
 MEDIA_ROOT = BASE_DIR / 'medias'
-STATIC_ROOT = BASE_DIR / 'static'
+STATIC_ROOT = BASE_DIR / 'statics'
 STATICFILES_DIRS = [BASE_DIR / 'images']
 
 
