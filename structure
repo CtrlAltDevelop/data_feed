@@ -1,0 +1,24 @@
+├── apps/               # Your Django Ninja API application (contains app-specific logic)
+├── common/             # Common utilities, shared functions, and reusable components
+├── config/             # Django project configuration and settings
+│   ├── __init__.py     # Marks the directory as a Python module
+│   ├── admin.py        # Admin panel configuration
+│   ├── api.py          # API router configuration for Django Ninja
+│   ├── asgi.py         # ASGI application entry point (for async support)
+│   ├── database.py     # Database configuration and connections
+│   ├── jazzmin.py      # Configuration for Jazzmin (customized Django admin theme)
+│   ├── logging.py      # Logging configuration for debugging and error tracking
+│   ├── middlewares.py  # Custom middlewares for request/response processing
+│   ├── settings.py     # Main settings file for Django (environment-based configurations)
+│   ├── urls.py         # URL routing configuration for the project
+│   └── wsgi.py         # WSGI entry point for production servers
+├── images/             # Static image files used within the project
+│   ├── some_file       # Example image or placeholder file
+│   └── ...
+├── .env                # Environment variables (e.g., secrets, database credentials)
+├── .gitignore          # Files and directories to ignore in Git version control
+├── manage.py           # Django’s command-line utility for project management
+├── README.md           # Documentation and project instructions
+├── requirements.txt    # List of Python dependencies
+├── shell.py            # Django shell script for running interactive commands
+└── structure           # (Optional) Project structure documentation
