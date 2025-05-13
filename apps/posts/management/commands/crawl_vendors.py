@@ -71,22 +71,41 @@ class Command(BaseCommand):
             time.sleep(2)  # Respectful crawling delay
 
     def fetch_html(self, url, page_url):
-        """Fetch HTML content using Playwright"""
         try:
             full_url = urljoin(url, page_url)
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                context = browser.new_context()
+                # Launch Chromium in headless mode
+                browser = p.chromium.launch(headless=True, args=['--disable-http2'])
+                # Create a context with a realistic user agent and viewport
+                context = browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                    viewport={"width": 1280, "height": 720}
+                )
                 page = context.new_page()
 
+                # Allow document and script requests, block others
                 page.route("**/*", lambda route, request: (
-                    route.abort() if request.resource_type != "document" else route.continue_()
+                    route.abort() if request.resource_type not in ["document", "script"] else route.continue_()
                 ))
 
+                # Navigate and wait for DOM content to load
                 page.goto(full_url, wait_until="domcontentloaded", timeout=60000)
+                # Wait for the vendor listings container to appear
+                page.wait_for_selector(".vertical-gutters--9318b", timeout=60000)
+
+                # Retrieve the HTML content
                 html = page.content()
                 browser.close()
                 return html
+
+        except TimeoutError as e:
+            # Save partial content for debugging
+            html = page.content()
+            with open("timeout_page.html", "w", encoding="utf-8") as f:
+                f.write(html)
+            self.stdout.write(self.style.ERROR(
+                f"  Timeout waiting for selector: {str(e)}. Saved partial content to timeout_page.html"))
+            return None
         except Exception as e:
             self.stdout.write(self.style.ERROR(f"  Fetch error: {str(e)}"))
             return None
