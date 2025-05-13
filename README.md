@@ -40,8 +40,9 @@ This project provides a RESTful API for managing and serving data feeds using Dj
     ```
 3. Install dependencies:
     ```bash
-   python.exe -m pip install --upgrade pip
-   pip install -r requirements 
+   python -m pip install --upgrade pip
+   pip install -r requirements
+   python -m playwright install
    ```
 
 4. Configure environment variables:
