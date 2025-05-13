@@ -114,10 +114,10 @@ The project structure is documented in the `structure` file. You can view it by 
 
 After starting the server, access the interactive API documentation at:
 - **API Endpoint:** [http://localhost:8000/api/v1/](http://localhost:8000/api/v1/)
-- **Swagger UI:** [http://localhost:8000/api/v1/](http://localhost:8000/api/v1/docs)
-- **ReDoc:** [http://localhost:8000/api/v1/](http://localhost:8000/api/v1/redoc)
-- **Admin Panel:** [http://localhost:8000/admin/](http://localhost:8000/admin/)
-- **Health Check:** [http://localhost:8000/api/v1/health](http://localhost:8000/api/v1/health)
+- **Swagger UI:** [api/v1/docs](http://localhost:8000/api/v1/docs)
+- **ReDoc:** [/api/v1/redoc](http://localhost:8000/api/v1/redoc)
+- **Admin Panel:** [/admin](http://localhost:8000/admin/)
+- **Health Check:** [/api/v1/health](http://localhost:8000/api/v1/health)
 
 ---
 
