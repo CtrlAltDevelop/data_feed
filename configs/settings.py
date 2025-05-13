@@ -31,6 +31,7 @@ for folder in ('logs', 'statics', 'medias'):
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
+LITELLM_API_KEY = os.environ.get('LITELLM_API_KEY')
 
 DEBUG = os.environ.get('DJANGO_DEBUG') == 'True'
 
