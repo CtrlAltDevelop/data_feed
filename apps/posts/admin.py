@@ -36,7 +36,7 @@ class SourceWebsiteAdmin(admin.ModelAdmin):
 
 @admin.register(CrawledPost)
 class CrawledPostAdmin(admin.ModelAdmin):
-    list_display = ('url', 'source', 'is_processed', 'created_at')
+    list_display = ('url','content', 'source', 'is_processed', 'created_at')
     search_fields = ('url', 'title')
     list_filter = ('is_processed',)
 
