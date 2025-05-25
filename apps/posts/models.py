@@ -51,6 +51,7 @@ class Vendor(models.Model):
 class SourceWebsite(models.Model):
     domain = models.CharField(max_length=255, unique=True)
     blog_path = models.CharField(max_length=255, blank=True, null=True)
+    pagination_pattern = models.CharField(max_length=255, blank=True, null=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

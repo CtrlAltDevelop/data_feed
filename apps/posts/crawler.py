@@ -192,6 +192,9 @@ class BlogCrawler:
 
     def discover_pagination_pattern(self, blog_url):
         """Pagination detection focusing on blog-related URLs"""
+        if self.source_website.pagination_pattern:
+            return json.loads(f"\"{self.source_website.pagination_pattern}\"")
+
         print(" - Detecting pagination pattern...")
         try:
             response = self.session.get(blog_url, timeout=20)
@@ -281,16 +284,18 @@ class BlogCrawler:
             json_str = self._extract_json_from_text(pattern)
             # Parse the JSON
             result = json.loads(json_str)
-            
+
             # Validate the result structure
             if isinstance(result, dict) and result.get('type'):
                 print(f" - LLM identified pattern: {result}")
-                
+
                 # Ensure pattern field exists for query_param/path types
                 if result['type'] in ['query_param', 'path'] and 'pattern' not in result:
                     print(" - LLM response missing pattern field")
                     raise ValueError("Missing pattern field")
-                    
+
+                self.source_website.pagination_pattern = f"{result}"
+                self.source_website.save()
                 return result
 
             if '{page}' not in pattern:
@@ -304,13 +309,19 @@ class BlogCrawler:
                 resp = self.session.head(test_url, timeout=10)
                 if resp.status_code == 200:
                     print(f" - Verified pagination pattern: {pattern}")
+                    self.source_website.pagination_pattern = f"{{'type': 'auto', 'pattern': pattern}}"
+                    self.source_website.save()
                     return {'type': 'auto', 'pattern': pattern}
             except Exception as e:
                 print(f" - Pattern verification failed: {str(e)}")
 
             # Fallback to traditional detection if LLM fails
             print(" - Falling back to traditional detection")
-            return self._traditional_pagination_detection(soup, blog_url)
+            pat = self._traditional_pagination_detection(soup, blog_url)
+            if pat:
+                self.source_website.pagination_pattern = f"{pat}"
+                self.source_website.save()
+            return pat
 
         except Exception as e:
             print(f" - Pagination detection error: {str(e)}")
@@ -343,6 +354,7 @@ class BlogCrawler:
         cleaned = re.sub(r'^[^{]+', '', text)  # Remove non-JSON prefix
         cleaned = re.sub(r'[^}]+$', '', cleaned)  # Remove non-JSON suffix
         return cleaned.strip()
+
     def _traditional_pagination_detection(self, soup, base_url):
         """Traditional pagination detection fallback"""
         # URL pattern detection
@@ -388,9 +400,10 @@ class BlogCrawler:
         return element.name
 
     def extract_post_links(self, html):
-        """Extract post links from a blog listing page"""
+        """Extract post links while ensuring they have valid paths"""
         soup = BeautifulSoup(html, 'html.parser')
-        links = []
+        links = set()
+        base_domain = urlparse(self.base_url).netloc
 
         # Common patterns for blog post links
         patterns = [
@@ -403,19 +416,195 @@ class BlogCrawler:
         for pattern in patterns:
             elements = soup.find_all(pattern['tag'], class_=pattern.get('class'))
             for elem in elements:
-                link = None
-                if elem.name == 'a':
-                    link = elem.get('href')
-                else:
-                    link_elem = elem.find('a')
-                    if link_elem:
-                        link = link_elem.get('href')
+                href = self._get_valid_href(elem, base_domain)
+                if href:
+                    links.add(href)
 
-                if link and self.is_valid_url(link):
-                    links.append(urljoin(self.base_url, link))
+        return list(links)
 
-        # Deduplicate
-        return list(set(links))
+    def _get_valid_href(self, elem, base_domain):
+        """Extract and validate href from element"""
+        href = None
+        if elem.name == 'a':
+            href = elem.get('href')
+        else:
+            link_elem = elem.find('a')
+            if link_elem:
+                href = link_elem.get('href')
+        
+        if not href:
+            return None
+
+        # Skip if href is just a fragment or query
+        if href.startswith(('#', '?')):
+            return None
+
+        # Ensure URL has a path component
+        parsed = urlparse(href)
+        if not parsed.path or parsed.path == '/':
+            return None
+
+        # Convert to absolute URL
+        full_url = urljoin(self.base_url, href)
+        
+        # Validate domain
+        parsed_full = urlparse(full_url)
+        if not parsed_full.netloc.endswith(base_domain):
+            return None
+
+        return full_url
+
+    def crawl_blog_listings(self):
+        """Crawl blog listings with proper pagination handling"""
+        if not self.blog_path:
+            if not self.find_blog_section():
+                CrawlLog.objects.create(
+                    source=self.source_website,
+                    status='error',
+                    message='Could not identify blog section'
+                )
+                return []
+
+        blog_url = urljoin(self.base_url, self.blog_path)
+        all_posts = set()
+
+        try:
+            # First page
+            response = self.session.get(blog_url, timeout=10)
+            posts = self.extract_post_links(response.text)
+            all_posts.update(posts)
+
+            # Handle pagination
+            pagination_str = getattr(self.source_website, 'pagination_pattern', '{}')
+            try:
+                pagination = ast.literal_eval(pagination_str)
+            except (ValueError, SyntaxError):
+                pagination = None
+
+            if isinstance(pagination, dict) and pagination.get('type'):
+                print(f" - Using pagination pattern: {pagination}")
+                
+                if pagination['type'] == 'query_param':
+                    param = pagination.get('param', 'page')
+                    base_url = blog_url.split('?')[0]
+                    
+                    for page in range(2, self.max_pages + 1):
+                        next_url = f"{base_url}?{param}={page}"
+                        if self._crawl_pagination_page(next_url, all_posts):
+                            break
+
+                elif pagination['type'] == 'path':
+                    base_url = blog_url.rstrip('/')
+                    base_url = re.sub(r'/page/\d+/?$', '', base_url)
+                    
+                    for page in range(2, self.max_pages + 1):
+                        next_url = f"{base_url}/page/{page}/"
+                        if self._crawl_pagination_page(next_url, all_posts):
+                            break
+
+            return list(all_posts)
+
+        except Exception as e:
+            print(f"Error crawling blog listings: {str(e)}")
+            return []
+
+    def _crawl_pagination_page(self, url, all_posts):
+        """Helper to crawl a single pagination page"""
+        try:
+            response = self.session.get(url, timeout=10)
+            new_posts = self.extract_post_links(response.text)
+            
+            if not new_posts or all(p in all_posts for p in new_posts):
+                return True  # Stop pagination
+                
+            all_posts.update(new_posts)
+            print(f" - Found {len(new_posts)} posts on {urlparse(url).path}")
+            return False
+        except Exception as e:
+            print(f" - Error crawling {url}: {str(e)}")
+            return True
+
+    def _safe_parse_pagination_pattern(self, pattern_str):
+        """Safely convert string pattern to dictionary"""
+        if not pattern_str or not isinstance(pattern_str, str):
+            return None
+
+        try:
+            # Handle cases where the string might use single quotes
+            normalized_str = pattern_str.replace("'", '"')
+            return json.loads(normalized_str)
+        except json.JSONDecodeError:
+            try:
+                # Fallback to ast.literal_eval for more flexible parsing
+                import ast
+                return ast.literal_eval(pattern_str)
+            except (ValueError, SyntaxError):
+                print(f" - Could not parse pagination pattern: {pattern_str}")
+                return None
+    def _generate_pagination_urls(self, pagination_pattern):
+        """Generate pagination URLs to exclude"""
+        print(f" - Generating pagination URLs for pattern: {pagination_pattern}")
+        urls = set()
+        if pagination_pattern['type'] in ['query_param', 'path']:
+            for page in range(1, 10):  # Test first 3 pages
+                url = pagination_pattern['pattern'].replace('{page}', str(page))
+                urls.add(url)
+        return urls
+
+    def _extract_and_validate_link(self, elem, base_domain):
+        """Safely extract and validate link from element"""
+        href = None
+        if elem.name == 'a':
+            href = elem.get('href')
+        else:
+            link_elem = elem.find('a')
+            if link_elem:
+                href = link_elem.get('href')
+
+        return self._validate_and_normalize_url(href, base_domain) if href else None
+
+    def _validate_and_normalize_url(self, href, base_domain):
+        """Ensure URL is valid and properly formatted"""
+        try:
+            # Skip if href matches common non-post patterns
+            if re.search(r'category|tag|author|date|feed', href, re.I):
+                return None
+
+            # Handle relative URLs
+            if not urlparse(href).netloc:
+                href = urljoin(f"https://{base_domain}", href)
+
+            # Final validation
+            parsed = urlparse(href)
+            if (parsed.scheme in ('http', 'https') and 
+                parsed.netloc.endswith(base_domain)):
+                return href.rstrip('/')
+        except Exception as e:
+            print(f" - URL validation error for {href}: {str(e)}")
+        return None
+
+    def _extract_link_from_element(self, elem):
+        """Helper to extract link from various element types"""
+        if elem.name == 'a':
+            return elem.get('href')
+
+        # Check for nested <a> tags
+        link_elem = elem.find('a')
+        if link_elem and link_elem.get('href'):
+            return link_elem.get('href')
+
+        # Check for data attributes
+        for attr in ['data-href', 'data-permalink', 'data-url']:
+            if elem.get(attr):
+                return elem.get(attr)
+
+        # Check for onclick handlers with URLs
+        if elem.get('onclick'):
+            match = re.search(r'window\.location\.href=[\'"](.*?)[\'"]', elem.get('onclick'))
+            if match:
+                return match.group(1)
+
+        return None
 
     def crawl_blog_listings(self):
         """Crawl through blog listing pages to find all posts"""
@@ -440,6 +629,16 @@ class BlogCrawler:
             # First page
             response = self.session.get(blog_url, timeout=10)
             posts = self.extract_post_links(response.text)
+
+            if not posts:
+                print("No posts found on the first page")
+                CrawlLog.objects.create(
+                    source=self.source_website,
+                    status='error',
+                    message='No posts found on the first page'
+                )
+                return []
+
             all_posts.update(posts)
 
             # Handle pagination if exists
@@ -527,7 +726,7 @@ class BlogCrawler:
         print(f"\nStarting crawl for {self.domain}")
 
         # Step 1: Find blog posts
-        print("1. Finding blog section...")
+        print("1. Finding blog urls...")
         post_urls = self.crawl_blog_listings()
         if not post_urls:
             print("ERROR: No posts found")
@@ -569,6 +768,11 @@ class BlogCrawler:
 
         print(f"Crawling completed in {time.time() - start_time:.2f} seconds")
         return True
+
+def add_site(domain):
+    """Run the crawler for a single domain"""
+    BlogCrawler(domain)
+    return True
 
 def run_crawler(domain):
     """Run the crawler for a single domain"""
