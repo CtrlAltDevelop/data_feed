@@ -58,19 +58,37 @@ class BlogCrawler:
         """Use LLM to identify the blog path from homepage"""
         try:
             print(f" - Fetching homepage: {self.base_url}")
-            response = self.session.get(self.base_url, timeout=10)
+            response = self.session.get(self.base_url, timeout=30)
             response.raise_for_status()
-
+            
             print(" - Analyzing links...")
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Extract all links
-            links = [a.get('href') for a in soup.find_all('a', href=True)]
-            links = [urljoin(self.base_url, l) for l in links if self.is_valid_url(l)]
+            # Get all links including relative paths
+            links = []
+            for a in soup.find_all('a', href=True):
+                href = a['href']
+                if href.startswith(('#', 'javascript:', 'mailto:', 'tel:')):
+                    continue
+                if not href.startswith(('http://', 'https://')):
+                    href = urljoin(self.base_url, href)
+                links.append(href)
             
             if not links:
-                print(" - No valid links found on homepage")
-                return False
+                print(" - Trying alternative link detection")
+                # Look for links in other elements
+                for element in soup.find_all(['div', 'li', 'section']):
+                    if element.find('a'):
+                        href = element.find('a')['href']
+                        if not href.startswith(('http://', 'https://')):
+                            href = urljoin(self.base_url, href)
+                        links.append(href)
+            
+            links = list(set(links))  # Remove duplicates
+            
+            if not links:
+                print(" - No links found, trying common blog paths directly")
+                return self.try_common_blog_paths()
             
             print(f" - Found {len(links)} links, analyzing with LLM...")
             
@@ -87,10 +105,9 @@ class BlogCrawler:
             response = litellm.completion(
                 model="groq/deepseek-r1-distill-llama-70b",
                 messages=[{"content": prompt, "role": "user"}],
-                max_tokens=50,
-                temperature=0.1
+                temperature=0
             )
-            
+            print(response)
             blog_path = response.choices[0].message.content.strip()
             
             if blog_path.lower() == 'none' or not blog_path:
