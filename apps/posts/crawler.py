@@ -191,40 +191,201 @@ class BlogCrawler:
         return False
 
     def discover_pagination_pattern(self, blog_url):
-        """Analyze pagination structure"""
-        print(" - Discovering pagination pattern...")
+        """Pagination detection focusing on blog-related URLs"""
+        print(" - Detecting pagination pattern...")
         try:
-            response = self.session.get(blog_url, timeout=10)
+            response = self.session.get(blog_url, timeout=20)
             soup = BeautifulSoup(response.text, 'html.parser')
 
-            # Look for common pagination elements
-            pagination = soup.find_all(['a', 'div'], class_=re.compile(r'page|pagination|next|prev', re.I))
-            page_links = []
+            # Normalize blog URL for comparison
+            normalized_blog_url = blog_url.rstrip('/') + '/'
 
-            for elem in pagination:
-                if elem.name == 'a' and elem.get('href'):
-                    href = elem.get('href')
-                    if self.is_valid_url(href):
-                        page_links.append(href)
+            # Collect potential pagination links using multiple strategies
+            potential_links = set()
 
-            # If we found pagination links, try to identify pattern
-            if page_links:
-                # Look for numeric patterns
-                for link in page_links:
-                    match = re.search(r'page=(\d+)', link) or re.search(r'/page/(\d+)', link)
-                    if match:
-                        return {
-                            'type': 'query_param' if 'page=' in link else 'path',
-                            'template': link.replace(match.group(1), '{page}')
-                        }
+            # Strategy 1: Links with pagination-related attributes
+            for a in soup.find_all('a', href=True):
+                href = a.get('href')
+                if not href:
+                    continue
 
-            print(" - No clear pagination pattern found")
-            # If no clear pattern, assume infinite scroll or "load more"
-            return None
+                full_url = urljoin(blog_url, href)
+
+                # Check URL characteristics
+                url_matches = (
+                    self.is_valid_url(full_url) and
+                    any([
+                        # Case 1: URL contains pagination terms
+                        re.search(r'page|pagination|pager|[\?\&]page=|/page/|/p/', href, re.I),
+                        # Case 2: Link text suggests pagination
+                        a.text and re.search(r'^\d+$|next|prev|older|newer', a.text.strip(), re.I),
+                        # Case 3: URL follows blog structure with numbers
+                        (full_url.startswith(normalized_blog_url) and re.search(r'\d', href))
+                    ])
+                )
+
+                if url_matches:
+                    potential_links.add(full_url)
+
+            # Strategy 2: Pagination containers
+            pagination_containers = soup.find_all(['nav', 'div', 'ul'], 
+                                            class_=re.compile(r'pagination|pager|pages', re.I))
+            for container in pagination_containers:
+                for a in container.find_all('a', href=True):
+                    full_url = urljoin(blog_url, a.get('href'))
+                    if self.is_valid_url(full_url):
+                        potential_links.add(full_url)
+
+            # Strategy 3: Numbered buttons
+            for btn in soup.find_all(['button', 'a'], 
+                                string=re.compile(r'^\d+$|next|prev|older|newer', re.I)):
+                if btn.get('href'):
+                    full_url = urljoin(blog_url, btn.get('href'))
+                    if self.is_valid_url(full_url):
+                        potential_links.add(full_url)
+
+            # Convert to list and sort for consistency
+            blog_links = sorted(potential_links)
+
+            if not blog_links:
+                print(" - No potential pagination links found")
+                return None
+
+            print(f" - Found {len(blog_links)} potential pagination links")
+
+            # Prepare LLM prompt with stricter guidance
+            prompt = f"""Analyze these URLs from {blog_url} and identify the pagination pattern.
+                Return ONLY a JSON response with these possible fields:
+                - 'type': Either 'query_param', 'path', or 'load_more'
+                - 'pattern': The URL pattern with page number replaced by {{page}}
+                - 'selector': CSS selector for pagination element if visible
+                
+                Example responses:
+                {{"type": "query_param", "pattern": "{blog_url}?page={{page}}", "selector": ".pagination"}}
+                {{"type": "path", "pattern": "{blog_url}/page/{{page}}/", "selector": "nav.pager"}}
+                {{"type": "load_more", "selector": "#load-more"}}
+                {{"type": null}} if no clear pattern
+                
+                URLs to analyze:
+                {sorted(blog_links)}
+                """
+
+            # Get LLM analysis
+            llm_response = litellm.completion(
+                model="groq/deepseek-r1-distill-llama-70b",
+                messages=[{"content": prompt, "role": "user"}],
+                temperature=0.1
+            )
+
+            pattern = llm_response.choices[0].message.content.strip()
+            json_str = self._extract_json_from_text(pattern)
+            # Parse the JSON
+            result = json.loads(json_str)
+            
+            # Validate the result structure
+            if isinstance(result, dict) and result.get('type'):
+                print(f" - LLM identified pattern: {result}")
+                
+                # Ensure pattern field exists for query_param/path types
+                if result['type'] in ['query_param', 'path'] and 'pattern' not in result:
+                    print(" - LLM response missing pattern field")
+                    raise ValueError("Missing pattern field")
+                    
+                return result
+
+            if '{page}' not in pattern:
+                print(f" - Invalid pattern format: {pattern}")
+                return None
+
+            # Verify the pattern works by testing page 2
+            test_url = pattern.replace('{page}', '2')
+            try:
+                print(f" - Testing URL: {test_url}")
+                resp = self.session.head(test_url, timeout=10)
+                if resp.status_code == 200:
+                    print(f" - Verified pagination pattern: {pattern}")
+                    return {'type': 'auto', 'pattern': pattern}
+            except Exception as e:
+                print(f" - Pattern verification failed: {str(e)}")
+
+            # Fallback to traditional detection if LLM fails
+            print(" - Falling back to traditional detection")
+            return self._traditional_pagination_detection(soup, blog_url)
 
         except Exception as e:
-            print(f"Error discovering pagination: {e}")
+            print(f" - Pagination detection error: {str(e)}")
             return None
+
+    def _extract_json_from_text(self, text):
+        """Extract JSON string from potentially messy LLM response"""
+        # Common cases we need to handle:
+        # 1. Plain JSON response
+        # 2. Markdown code block
+        # 3. Text with JSON embedded
+        # 4. Malformed JSON with extra text
+
+        # Try direct parse first
+        text = text.strip()
+        if text.startswith('{') and text.endswith('}'):
+            return text
+
+        # Handle markdown code blocks
+        md_match = re.search(r'```(?:json)?\n({.*?})\n```', text, re.DOTALL)
+        if md_match:
+            return md_match.group(1)
+
+        # Handle JSON embedded in text
+        brace_match = re.search(r'\{.*?\}', text, re.DOTALL)
+        if brace_match:
+            return brace_match.group(0)
+
+        # Fallback - clean and try to parse anyway
+        cleaned = re.sub(r'^[^{]+', '', text)  # Remove non-JSON prefix
+        cleaned = re.sub(r'[^}]+$', '', cleaned)  # Remove non-JSON suffix
+        return cleaned.strip()
+    def _traditional_pagination_detection(self, soup, base_url):
+        """Traditional pagination detection fallback"""
+        # URL pattern detection
+        url_pattern = self._detect_url_patterns(
+            [a['href'] for a in soup.find_all('a', href=True)],
+            base_url
+        )
+        if url_pattern:
+            return url_pattern
+
+        # Structural detection
+        pagination = soup.find(['nav', 'div', 'ul'], 
+                            class_=re.compile(r'pagination|pager', re.I))
+        if pagination:
+            return {'type': 'structural', 'selector': self._generate_selector(pagination)}
+
+        return None
+
+    def _detect_url_patterns(self, links, base_url):
+        """Traditional URL pattern detection"""
+        for link in links:
+            # Query param pattern
+            if '?page=' in link:
+                return {
+                    'type': 'query_param',
+                    'pattern': link.split('?')[0] + '?page={page}'
+                }
+            # Path pattern
+            if '/page/' in link:
+                return {
+                    'type': 'path',
+                    'pattern': re.sub(r'/page/\d+', '/page/{page}', link)
+                }
+        return None
+
+    def _generate_selector(self, element):
+        """Generate CSS selector for an element"""
+        if element.get('id'):
+            return f"#{element['id']}"
+        classes = element.get('class', [])
+        if classes:
+            return f".{'.'.join(classes)}"
+        return element.name
 
     def extract_post_links(self, html):
         """Extract post links from a blog listing page"""
@@ -258,6 +419,9 @@ class BlogCrawler:
 
     def crawl_blog_listings(self):
         """Crawl through blog listing pages to find all posts"""
+        if self.source_website.blog_path:
+            self.blog_path = self.source_website.blog_path
+
         if not self.blog_path:
             if not self.find_blog_section():
                 CrawlLog.objects.create(
@@ -269,6 +433,7 @@ class BlogCrawler:
 
         blog_url = urljoin(self.base_url, self.blog_path)
         pagination = self.discover_pagination_pattern(blog_url)
+
         all_posts = set()
 
         try:
