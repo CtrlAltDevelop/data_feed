@@ -405,22 +405,60 @@ class BlogCrawler:
         links = set()
         base_domain = urlparse(self.base_url).netloc
 
-        # Common patterns for blog post links
-        patterns = [
-            {'tag': 'article', 'class': re.compile(r'post|article|blog', re.I)},
-            {'tag': 'div', 'class': re.compile(r'post|article|blog', re.I)},
-            {'tag': 'a', 'class': re.compile(r'post|article|blog', re.I)},
-            {'tag': 'h2', 'class': re.compile(r'entry-title|post-title', re.I)},
+        # Common patterns for blog post containers
+        container_selectors = [
+            'article',
+            'div[class*="post"]',
+            'div[class*="blog"]',
+            'div[class*="article"]',
+            'h2[class*="post-title"]',
+            'h2[class*="entry-title"]',
+            'main li',
+            'a[class*="post"]',
+            'a[class*="blog"]',
+            'a[class*="article"]',
         ]
 
-        for pattern in patterns:
-            elements = soup.find_all(pattern['tag'], class_=pattern.get('class'))
-            for elem in elements:
-                href = self._get_valid_href(elem, base_domain)
-                if href:
+        # First try structured containers
+        for selector in container_selectors:
+            for container in soup.select(selector):
+                # Find all <a> inside the container
+                for a in container.find_all('a', href=True):
+                    href = self._get_valid_href(a, base_domain)
+                    if href:
+                        links.add(href)
+
+        # If nothing found, fallback to scanning all <a> tags
+        if not links:
+            print(" - No links found using structured patterns, falling back to all <a> tags")
+            for a in soup.find_all('a', href=True):
+                href = self._get_valid_href(a, base_domain)
+                if href and self._is_probable_blog_post(href):
                     links.add(href)
 
         return list(links)
+
+    def _get_valid_href(self, tag, base_domain):
+        """Helper to validate and normalize hrefs"""
+        href = tag.get('href')
+        if not href or href.startswith('#'):
+            return None
+
+        absolute_url = urljoin(self.base_url, href)
+        parsed = urlparse(absolute_url)
+        
+        # Ensure it's from the same domain and not media/file link
+        if parsed.netloc != base_domain:
+            return None
+        if re.search(r'\.(jpg|jpeg|png|gif|pdf|svg|css|js|ico)(\?|$)', parsed.path, re.I):
+            return None
+
+        return absolute_url
+
+    def _is_probable_blog_post(self, href):
+        """Heuristic to filter blog-like URLs"""
+        # You can tweak this logic for your needs
+        return re.search(r'/\d{4}/\d{2}/|/blog/|/post/|/article/|/how-to-|/home/', href)
 
     def _get_valid_href(self, elem, base_domain):
         """Extract and validate href from element"""
@@ -567,12 +605,6 @@ class BlogCrawler:
             posts = self.extract_post_links(response.text)
 
             if not posts:
-                print("No posts found on the first page")
-                CrawlLog.objects.create(
-                    source=self.source_website,
-                    status='error',
-                    message='No posts found on the first page'
-                )
                 return []
 
             all_posts.update(posts)
