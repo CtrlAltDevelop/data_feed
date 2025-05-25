@@ -33,7 +33,7 @@ class BlogCrawler:
         self.blog_path = None
         self.post_url_pattern = None
         self.source_website, _ = SourceWebsite.objects.get_or_create(domain=self.domain)
-        
+
     @staticmethod
     def normalize_domain(domain):
         """Normalize the domain to remove protocol and paths"""
@@ -42,7 +42,7 @@ class BlogCrawler:
             domain = domain.split('//')[1]
         domain = domain.split('/')[0]
         return domain
-        
+
     def is_valid_url(self, url):
         """Check if URL belongs to the domain and is valid"""
         parsed = urlparse(url)
@@ -53,103 +53,160 @@ class BlogCrawler:
         if not parsed.scheme in ('http', 'https'):
             return False
         return True
-        
+
     def find_blog_section(self):
-        """Use LLM to identify the blog path from homepage"""
+        """Generic blog path detection using multiple strategies"""
         try:
-            print(f" - Fetching homepage: {self.base_url}")
+            print(f"\nAttempting to find blog section on {self.domain}")
+
+            # Strategy 1: Fetch homepage and analyze links
+            print(" - Fetching homepage...")
             response = self.session.get(self.base_url, timeout=30)
             response.raise_for_status()
-            
-            print(" - Analyzing links...")
             soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Get all links including relative paths
-            links = []
+
+            # Collect all unique, valid links
+            links = set()
             for a in soup.find_all('a', href=True):
-                href = a['href']
-                if href.startswith(('#', 'javascript:', 'mailto:', 'tel:')):
+                href = a['href'].strip()
+                if not href or href.startswith(('#', 'javascript:', 'mailto:', 'tel:')):
                     continue
                 if not href.startswith(('http://', 'https://')):
                     href = urljoin(self.base_url, href)
-                links.append(href)
-            
-            if not links:
-                print(" - Trying alternative link detection")
-                # Look for links in other elements
-                for element in soup.find_all(['div', 'li', 'section']):
-                    if element.find('a'):
-                        href = element.find('a')['href']
-                        if not href.startswith(('http://', 'https://')):
-                            href = urljoin(self.base_url, href)
-                        links.append(href)
-            
-            links = list(set(links))  # Remove duplicates
-            
-            if not links:
-                print(" - No links found, trying common blog paths directly")
+                if self.is_valid_url(href):
+                    links.add(href)
+
+            # Strategy 2: Look for common structural elements
+            blog_candidates = set()
+            for element in soup.find_all(['nav', 'header', 'main', 'section']):
+                for a in element.find_all('a', href=True):
+                    href = a['href'].strip()
+                    if not href.startswith(('http://', 'https://')):
+                        href = urljoin(self.base_url, href)
+                    if self.is_valid_url(href):
+                        blog_candidates.add(href)
+
+            all_links = list(links.union(blog_candidates))
+
+            if not all_links:
+                print(" - No links found on homepage")
                 return self.try_common_blog_paths()
-            
-            print(f" - Found {len(links)} links, analyzing with LLM...")
-            
-            # Prepare prompt for LLM
-            prompt = f"""Analyze these URLs from {self.domain} and identify which path is most likely the blog section.
-            Return ONLY the path segment (like '/blog' or '/news') or 'None' if not clear.
+
+            print(f" - Found {len(all_links)} potential links")
+
+            # Strategy 3: Use LLM to analyze link patterns
+            print(" - Analyzing link patterns with LLM...")
+            prompt = f"""Analyze these URLs from {self.domain} and identify the most likely blog section path.
+            Return ONLY the path segment (like '/blog') or 'None' if unclear. Be strict - only return a path if clearly a blog.
             
             URLs:
-            {links[:20]}  # Limit to first 20 to avoid token limits
+            {sorted(all_links)[:25]}  # Limited to first 25 for token efficiency
             
-            Most likely blog path:"""
-            
-            # Get LLM analysis using LiteLLM
+            Blog path:"""
+
             response = litellm.completion(
                 model="groq/deepseek-r1-distill-llama-70b",
                 messages=[{"content": prompt, "role": "user"}],
                 temperature=0
             )
-            print(response)
-            blog_path = response.choices[0].message.content.strip()
-            
-            if blog_path.lower() == 'none' or not blog_path:
-                # Fallback to common blog paths
-                common_paths = ['/blog', '/news', '/articles', '/stories', '/journal']
-                for path in common_paths:
-                    test_url = urljoin(self.base_url, path)
-                    try:
-                        resp = self.session.head(test_url, timeout=5, allow_redirects=True)
-                        if resp.status_code == 200:
-                            blog_path = path
-                            break
-                    except:
-                        continue
-            
-            if blog_path and blog_path != 'None':
-                self.blog_path = blog_path
-                self.source_website.blog_path = blog_path
-                self.source_website.save()
-                return True
-            return False
-            
+
+            llm_response = response.choices[0].message.content.strip()
+            print(f" - LLM response: {llm_response}")
+
+            # Clean and validate LLM response
+            blog_path = None
+            if llm_response.lower() != 'none':
+                # Extract first path-like segment from response
+                match = re.search(r'(?:^|\s)(/\w[\w-]*)', llm_response)
+                if match:
+                    blog_path = match.group(1).rstrip('/')
+
+            # Strategy 4: Verify the candidate path
+            if blog_path:
+                test_url = urljoin(self.base_url, blog_path.lstrip('/'))  # Clean leading slash
+                print(f" - Testing candidate blog path: {test_url}")
+                try:
+                    resp = self.session.get(test_url, timeout=10)
+                    if resp.status_code == 200:
+                        soup = BeautifulSoup(resp.text, 'html.parser')
+
+                        # Heuristic: Check if it resembles a blog
+                        blog_like_elements = soup.select('article, div.post, div.blog-item, #blog, .blog, section.blog')
+                        if blog_like_elements:
+                            self.blog_path = blog_path
+                            self.source_website.blog_path = blog_path
+                            self.source_website.save(update_fields=['blog_path'])
+                            print(f" - Confirmed blog path: {blog_path}")
+                            return True
+                        else:
+                            print(" - No blog-like elements found on the page.")
+                    else:
+                        print(f" - Received non-200 status code: {resp.status_code}")
+                except requests.RequestException as e:
+                    print(f" - Request failed: {e}")
+                except Exception as e:
+                    print(f" - Verification exception: {str(e)}")
+
+            # Strategy 5: Fallback to common paths
+            print(" - Trying common blog paths as fallback")
+            return self.try_common_blog_paths()
+
         except Exception as e:
-            print(f"Error finding blog section: {e}")
+            print(f"Error in find_blog_section: {str(e)}")
             return False
-            
+
+    def try_common_blog_paths(self):
+        """Systematically test common blog path patterns"""
+        common_paths = [
+            '/blog', '/news', '/articles', '/stories',
+            '/journal', '/updates', '/posts', '/writing',
+            '/magazine', '/content', '/blog/posts'
+        ]
+
+        print(" - Testing common blog paths...")
+        for path in common_paths:
+            test_url = urljoin(self.base_url, path)
+            try:
+                print(f"   - Trying {path}...", end=' ')
+                resp = self.session.get(test_url, timeout=8)
+                if resp.status_code == 200:
+                    soup = BeautifulSoup(resp.text, 'html.parser')
+                    # Verify page structure looks like a blog
+                    if (soup.find('article') or 
+                        soup.find(class_=re.compile('post|article|blog', re.I)) or
+                        len(soup.find_all('a', href=re.compile(r'/blog/|/post/|/article/'))) >= 3):
+                        self.blog_path = path
+                        self.source_website.blog_path = path
+                        self.source_website.save()
+                        print("SUCCESS")
+                        return True
+                    print("not a blog")
+                else:
+                    print(f"status {resp.status_code}")
+            except Exception as e:
+                print(f"error: {str(e)}")
+                continue
+
+        print(" - No blog path found through common patterns")
+        return False
+
     def discover_pagination_pattern(self, blog_url):
         """Analyze pagination structure"""
+        print(" - Discovering pagination pattern...")
         try:
             response = self.session.get(blog_url, timeout=10)
             soup = BeautifulSoup(response.text, 'html.parser')
-            
+
             # Look for common pagination elements
             pagination = soup.find_all(['a', 'div'], class_=re.compile(r'page|pagination|next|prev', re.I))
             page_links = []
-            
+
             for elem in pagination:
                 if elem.name == 'a' and elem.get('href'):
                     href = elem.get('href')
                     if self.is_valid_url(href):
                         page_links.append(href)
-            
+
             # If we found pagination links, try to identify pattern
             if page_links:
                 # Look for numeric patterns
@@ -160,19 +217,20 @@ class BlogCrawler:
                             'type': 'query_param' if 'page=' in link else 'path',
                             'template': link.replace(match.group(1), '{page}')
                         }
-            
+
+            print(" - No clear pagination pattern found")
             # If no clear pattern, assume infinite scroll or "load more"
             return None
-            
+
         except Exception as e:
             print(f"Error discovering pagination: {e}")
             return None
-            
+
     def extract_post_links(self, html):
         """Extract post links from a blog listing page"""
         soup = BeautifulSoup(html, 'html.parser')
         links = []
-        
+
         # Common patterns for blog post links
         patterns = [
             {'tag': 'article', 'class': re.compile(r'post|article|blog', re.I)},
@@ -180,7 +238,7 @@ class BlogCrawler:
             {'tag': 'a', 'class': re.compile(r'post|article|blog', re.I)},
             {'tag': 'h2', 'class': re.compile(r'entry-title|post-title', re.I)},
         ]
-        
+
         for pattern in patterns:
             elements = soup.find_all(pattern['tag'], class_=pattern.get('class'))
             for elem in elements:
@@ -191,13 +249,13 @@ class BlogCrawler:
                     link_elem = elem.find('a')
                     if link_elem:
                         link = link_elem.get('href')
-                
+
                 if link and self.is_valid_url(link):
                     links.append(urljoin(self.base_url, link))
-        
+
         # Deduplicate
         return list(set(links))
-        
+
     def crawl_blog_listings(self):
         """Crawl through blog listing pages to find all posts"""
         if not self.blog_path:
@@ -208,17 +266,17 @@ class BlogCrawler:
                     message='Could not identify blog section'
                 )
                 return []
-        
+
         blog_url = urljoin(self.base_url, self.blog_path)
         pagination = self.discover_pagination_pattern(blog_url)
         all_posts = set()
-        
+
         try:
             # First page
             response = self.session.get(blog_url, timeout=10)
             posts = self.extract_post_links(response.text)
             all_posts.update(posts)
-            
+
             # Handle pagination if exists
             if pagination:
                 for page in range(2, self.max_pages + 1):
@@ -227,43 +285,43 @@ class BlogCrawler:
                             next_url = f"{blog_url}?{pagination['template'].format(page=page)}"
                         else:
                             next_url = pagination['template'].format(page=page)
-                        
+
                         response = self.session.get(next_url, timeout=10)
                         new_posts = self.extract_post_links(response.text)
-                        
+
                         if not new_posts or all(p in all_posts for p in new_posts):
                             break  # No new posts or reached end
-                            
+
                         all_posts.update(new_posts)
-                        
+
                     except Exception as e:
                         print(f"Error crawling page {page}: {e}")
                         break
-            
+
             return list(all_posts)
-            
+
         except Exception as e:
             print(f"Error crawling blog listings: {e}")
             return []
-            
+
     def extract_post_content(self, url):
         """Extract main content from a blog post URL"""
         try:
             response = self.session.get(url, timeout=10)
             doc = Document(response.text)
-            
+
             # Use readability to extract main content
             soup = BeautifulSoup(doc.summary(), 'html.parser')
-            
+
             # Clean up content
             for element in soup(['script', 'style', 'nav', 'footer', 'iframe', 'aside']):
                 element.decompose()
-                
+
             content = soup.get_text('\n', strip=True)
-            
+
             # Get title
             title = doc.title()
-            
+
             return {
                 'url': url,
                 'title': title,
@@ -275,11 +333,11 @@ class BlogCrawler:
                     'extracted_at': timezone.now().isoformat()
                 }
             }
-            
+
         except Exception as e:
             print(f"Error extracting content from {url}: {e}")
             return None
-            
+
     def save_post(self, post_data):
         """Save extracted post to database"""
         try:
@@ -297,12 +355,12 @@ class BlogCrawler:
         except Exception as e:
             print(f"Error saving post {post_data['url']}: {e}")
             return False
-            
+
     def crawl_site(self):
         """Main method to crawl a site and save posts"""
         start_time = time.time()
         print(f"\nStarting crawl for {self.domain}")
-        
+
         # Step 1: Find blog posts
         print("1. Finding blog section...")
         post_urls = self.crawl_blog_listings()
@@ -315,7 +373,7 @@ class BlogCrawler:
                 posts_found=0
             )
             return False
-        
+
         print(f"2. Found {len(post_urls)} posts")
         # Step 2: Process posts in parallel
         saved_count = 0
@@ -328,13 +386,13 @@ class BlogCrawler:
                     print(f" - Skipping existing post: {url}")
                     continue
                 futures.append(executor.submit(self.extract_post_content, url))
-            
+
             for future in as_completed(futures):
                 result = future.result()
                 if result and self.save_post(result):
                     saved_count += 1
                     print(f" + Saved post: {result['url']}")
-        
+
         # Log results
         print(f"4. Crawling completed. Saved {saved_count} new posts")
         CrawlLog.objects.create(
@@ -343,7 +401,7 @@ class BlogCrawler:
             message=f'Crawled {len(post_urls)} posts, saved {saved_count} new ones',
             posts_found=len(post_urls)
         )
-        
+
         print(f"Crawling completed in {time.time() - start_time:.2f} seconds")
         return True
 
