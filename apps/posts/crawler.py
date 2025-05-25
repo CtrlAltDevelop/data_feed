@@ -19,6 +19,7 @@ load_dotenv()
 GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 litellm.groq_key = GROQ_API_KEY
 
+# this class has the responsibility of finding blog post links from a set of defined domains
 class BlogCrawler:
     def __init__(self, domain, max_pages=10, max_workers=5):
         self.domain = self.normalize_domain(domain)
@@ -31,7 +32,6 @@ class BlogCrawler:
             'Accept-Language': 'en-US,en;q=0.9',
         })
         self.blog_path = None
-        self.post_url_pattern = None
         self.source_website, _ = SourceWebsite.objects.get_or_create(domain=self.domain)
 
     @staticmethod
@@ -54,10 +54,10 @@ class BlogCrawler:
             return False
         return True
 
-    def find_blog_section(self):
+    def find_blog_path(self):
         """Generic blog path detection using multiple strategies"""
         try:
-            print(f"\nAttempting to find blog section on {self.domain}")
+            print(f"\nAttempting to find blog path on {self.domain}")
 
             # Strategy 1: Fetch homepage and analyze links
             print(" - Fetching homepage...")
@@ -97,10 +97,10 @@ class BlogCrawler:
             # Strategy 3: Use LLM to analyze link patterns
             print(" - Analyzing link patterns with LLM...")
             prompt = f"""Analyze these URLs from {self.domain} and identify the most likely blog section path.
-            Return ONLY the path segment (like '/blog') or 'None' if unclear. Be strict - only return a path if clearly a blog.
+            Return ONLY the path segment (like '/blog') or 'None' if unclear. if you couldn't determine a path, return a path that you think is most likely content related since the user provided this domain they must be looking for something like a blog page even if you determine the the whole domain is a blog you should return a path that is most likely to be a blog page not the root.
             
             URLs:
-            {sorted(all_links)[:25]}  # Limited to first 25 for token efficiency
+            {sorted(all_links)}
             
             Blog path:"""
 
@@ -131,7 +131,7 @@ class BlogCrawler:
                         soup = BeautifulSoup(resp.text, 'html.parser')
 
                         # Heuristic: Check if it resembles a blog
-                        blog_like_elements = soup.select('article, div.post, div.blog-item, #blog, .blog, section.blog')
+                        blog_like_elements = soup.select('article, div.post, div.blog-item, #blog, .blog, section.blog, #main')
                         if blog_like_elements:
                             self.blog_path = blog_path
                             self.source_website.blog_path = blog_path
@@ -152,13 +152,13 @@ class BlogCrawler:
             return self.try_common_blog_paths()
 
         except Exception as e:
-            print(f"Error in find_blog_section: {str(e)}")
+            print(f"Error in: {str(e)}")
             return False
 
     def try_common_blog_paths(self):
         """Systematically test common blog path patterns"""
         common_paths = [
-            '/blog', '/news', '/articles', '/stories',
+            '/blog', '/news', '/latest', '/articles', '/stories',
             '/journal', '/updates', '/posts', '/writing',
             '/magazine', '/content', '/blog/posts'
         ]
@@ -431,7 +431,7 @@ class BlogCrawler:
             link_elem = elem.find('a')
             if link_elem:
                 href = link_elem.get('href')
-        
+
         if not href:
             return None
 
@@ -446,7 +446,7 @@ class BlogCrawler:
 
         # Convert to absolute URL
         full_url = urljoin(self.base_url, href)
-        
+
         # Validate domain
         parsed_full = urlparse(full_url)
         if not parsed_full.netloc.endswith(base_domain):
@@ -454,69 +454,15 @@ class BlogCrawler:
 
         return full_url
 
-    def crawl_blog_listings(self):
-        """Crawl blog listings with proper pagination handling"""
-        if not self.blog_path:
-            if not self.find_blog_section():
-                CrawlLog.objects.create(
-                    source=self.source_website,
-                    status='error',
-                    message='Could not identify blog section'
-                )
-                return []
-
-        blog_url = urljoin(self.base_url, self.blog_path)
-        all_posts = set()
-
-        try:
-            # First page
-            response = self.session.get(blog_url, timeout=10)
-            posts = self.extract_post_links(response.text)
-            all_posts.update(posts)
-
-            # Handle pagination
-            pagination_str = getattr(self.source_website, 'pagination_pattern', '{}')
-            try:
-                pagination = ast.literal_eval(pagination_str)
-            except (ValueError, SyntaxError):
-                pagination = None
-
-            if isinstance(pagination, dict) and pagination.get('type'):
-                print(f" - Using pagination pattern: {pagination}")
-                
-                if pagination['type'] == 'query_param':
-                    param = pagination.get('param', 'page')
-                    base_url = blog_url.split('?')[0]
-                    
-                    for page in range(2, self.max_pages + 1):
-                        next_url = f"{base_url}?{param}={page}"
-                        if self._crawl_pagination_page(next_url, all_posts):
-                            break
-
-                elif pagination['type'] == 'path':
-                    base_url = blog_url.rstrip('/')
-                    base_url = re.sub(r'/page/\d+/?$', '', base_url)
-                    
-                    for page in range(2, self.max_pages + 1):
-                        next_url = f"{base_url}/page/{page}/"
-                        if self._crawl_pagination_page(next_url, all_posts):
-                            break
-
-            return list(all_posts)
-
-        except Exception as e:
-            print(f"Error crawling blog listings: {str(e)}")
-            return []
-
     def _crawl_pagination_page(self, url, all_posts):
         """Helper to crawl a single pagination page"""
         try:
             response = self.session.get(url, timeout=10)
             new_posts = self.extract_post_links(response.text)
-            
+
             if not new_posts or all(p in all_posts for p in new_posts):
                 return True  # Stop pagination
-                
+
             all_posts.update(new_posts)
             print(f" - Found {len(new_posts)} posts on {urlparse(url).path}")
             return False
@@ -541,6 +487,7 @@ class BlogCrawler:
             except (ValueError, SyntaxError):
                 print(f" - Could not parse pagination pattern: {pattern_str}")
                 return None
+
     def _generate_pagination_urls(self, pagination_pattern):
         """Generate pagination URLs to exclude"""
         print(f" - Generating pagination URLs for pattern: {pagination_pattern}")
@@ -606,22 +553,11 @@ class BlogCrawler:
 
         return None
 
-    def crawl_blog_listings(self):
+    def get_all_blog_posts_links(self):
         """Crawl through blog listing pages to find all posts"""
-        if self.source_website.blog_path:
-            self.blog_path = self.source_website.blog_path
-
-        if not self.blog_path:
-            if not self.find_blog_section():
-                CrawlLog.objects.create(
-                    source=self.source_website,
-                    status='error',
-                    message='Could not identify blog section'
-                )
-                return []
 
         blog_url = urljoin(self.base_url, self.blog_path)
-        pagination = self.discover_pagination_pattern(blog_url)
+        pagination = self._safe_parse_pagination_pattern(self.source_website.pagination_pattern)
 
         all_posts = set()
 
@@ -642,13 +578,13 @@ class BlogCrawler:
             all_posts.update(posts)
 
             # Handle pagination if exists
-            if pagination:
+            if pagination and 'pattern' in pagination:
                 for page in range(2, self.max_pages + 1):
                     try:
-                        if pagination['type'] == 'query_param':
-                            next_url = f"{blog_url}?{pagination['template'].format(page=page)}"
+                        if pagination.get('type') == 'query_param':
+                            next_url = pagination['pattern'].format(page=page)
                         else:
-                            next_url = pagination['template'].format(page=page)
+                            next_url = pagination['pattern'].format(page=page)
 
                         response = self.session.get(next_url, timeout=10)
                         new_posts = self.extract_post_links(response.text)
@@ -667,6 +603,45 @@ class BlogCrawler:
         except Exception as e:
             print(f"Error crawling blog listings: {e}")
             return []
+
+    def update_blog_posts(self):
+        post_urls = self.get_all_blog_posts_links()
+        if not post_urls:
+            print("ERROR: No posts found")
+            CrawlLog.objects.create(
+                source=self.source_website,
+                status='error',
+                message='No posts found',
+                posts_found=0
+            )
+            return False
+
+        print(f"2. Found {len(post_urls)} posts")
+        # Step 2: Process posts in parallel
+        saved_count = 0
+        print("3. Processing posts...")
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = []
+            for url in post_urls:
+                # Skip if already exists
+                if CrawledPost.objects.filter(url=url).exists():
+                    print(f" - Skipping existing post: {url}")
+                    continue
+                futures.append(executor.submit(self.extract_post_content, url))
+
+            for future in as_completed(futures):
+                result = future.result()
+                if result and self.save_post(result):
+                    saved_count += 1
+                    print(f" + Saved post: {result['url']}")
+
+        # Log results
+        CrawlLog.objects.create(
+            source=self.source_website,
+            status='success',
+            message=f'Crawled {len(post_urls)} posts, saved {saved_count} new ones',
+            posts_found=len(post_urls)
+        )
 
     def extract_post_content(self, url):
         """Extract main content from a blog post URL"""
@@ -725,46 +700,25 @@ class BlogCrawler:
         start_time = time.time()
         print(f"\nStarting crawl for {self.domain}")
 
-        # Step 1: Find blog posts
-        print("1. Finding blog urls...")
-        post_urls = self.crawl_blog_listings()
-        if not post_urls:
-            print("ERROR: No posts found")
-            CrawlLog.objects.create(
-                source=self.source_website,
-                status='error',
-                message='No posts found',
-                posts_found=0
-            )
-            return False
+        print("1. Finding blog path")
+        if self.source_website.blog_path:
+            self.blog_path = self.source_website.blog_path
 
-        print(f"2. Found {len(post_urls)} posts")
-        # Step 2: Process posts in parallel
-        saved_count = 0
-        print("3. Processing posts...")
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = []
-            for url in post_urls:
-                # Skip if already exists
-                if CrawledPost.objects.filter(url=url).exists():
-                    print(f" - Skipping existing post: {url}")
-                    continue
-                futures.append(executor.submit(self.extract_post_content, url))
+        if not self.blog_path:
+            if not self.find_blog_path():
+                CrawlLog.objects.create(
+                    source=self.source_website,
+                    status='error',
+                    message='Could not identify blog section'
+                )
+                return False
 
-            for future in as_completed(futures):
-                result = future.result()
-                if result and self.save_post(result):
-                    saved_count += 1
-                    print(f" + Saved post: {result['url']}")
+        print("2. Discovering pagination pattern")
+        blog_url = urljoin(self.base_url, self.blog_path)
+        self.discover_pagination_pattern(blog_url)
 
-        # Log results
-        print(f"4. Crawling completed. Saved {saved_count} new posts")
-        CrawlLog.objects.create(
-            source=self.source_website,
-            status='success',
-            message=f'Crawled {len(post_urls)} posts, saved {saved_count} new ones',
-            posts_found=len(post_urls)
-        )
+        print("3. Update list of blog posts")
+        self.update_blog_posts()
 
         print(f"Crawling completed in {time.time() - start_time:.2f} seconds")
         return True
