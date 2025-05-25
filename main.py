@@ -55,7 +55,7 @@ def fetch_html(url: str, page_url: str = "") -> str:
             )
             
             # Go to page and wait for DOMContentLoaded (not full load)
-            page.goto(full_url, wait_until="domcontentloaded", timeout=0)
+            page.goto(full_url, wait_until="networkidle", timeout=0)
 
             html = page.content()
             browser.close()

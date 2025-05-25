@@ -78,6 +78,15 @@ This project provides a RESTful API for managing and serving data feeds using Dj
 
 ---
 
+## Usage
+
+```
+python manage.py crawl_vendors
+python manage.py crawl_blogs --domain domain.com
+```
+
+---
+
 ## Project Structure
 
 The project structure is documented in the `structure` file. You can view it by running [📂 View Project Structure](structure)
