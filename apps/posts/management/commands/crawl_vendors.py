@@ -75,7 +75,7 @@ class Command(BaseCommand):
             full_url = urljoin(url, page_url)
             with sync_playwright() as p:
                 # Launch Chromium in headless mode
-                browser = p.chromium.launch(headless=True, args=['--disable-http2'])
+                browser = p.chromium.launch(headless=False, args=['--disable-http2'])
                 # Create a context with a realistic user agent and viewport
                 context = browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -89,9 +89,9 @@ class Command(BaseCommand):
                 ))
 
                 # Navigate and wait for DOM content to load
-                page.goto(full_url, wait_until="domcontentloaded", timeout=60000)
+                page.goto(full_url, wait_until="networkidle")
                 # Wait for the vendor listings container to appear
-                page.wait_for_selector(".vertical-gutters--9318b", timeout=60000)
+                # page.wait_for_selector(".vertical-gutters--9318b", timeout=60000)
 
                 # Retrieve the HTML content
                 html = page.content()
