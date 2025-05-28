@@ -52,6 +52,8 @@ INSTALLED_APPS = [
 
     # Third-party
     'ninja',
+    'ckeditor',
+    'ckeditor_uploader',
 
     # Internal
     'common.apps.CommonConfig',
@@ -115,3 +117,86 @@ STATICFILES_DIRS = [BASE_DIR / 'images']
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 X_FRAME_OPTIONS = 'SAMEORIGIN'
+
+CKEDITOR_UPLOAD_PATH = MEDIA_ROOT / "ckeditors"
+CKEDITOR_CONFIGS = {
+    'default': {
+        'toolbar': 'Full',
+        'height': 400,
+        'width': '100%',
+        'toolbar_Full': [
+            ['Source', '-', 'Undo', 'Redo'],
+            ['Bold', 'Italic', 'Underline', 'Strike', 'Subscript', 'Superscript', '-', 'RemoveFormat'],
+            ['NumberedList', 'BulletedList', '-', 'Outdent', 'Indent', '-', 'Blockquote', 'CreateDiv', '-', 'JustifyLeft', 'JustifyCenter', 'JustifyRight', 'JustifyBlock'],
+            ['Link', 'Unlink', 'Anchor'],
+            ['Image', 'Table', 'HorizontalRule', 'SpecialChar', 'Iframe'],
+            ['Styles', 'Format', 'Font', 'FontSize'],
+            ['TextColor', 'BGColor'],
+            ['Maximize', 'ShowBlocks'],
+        ],
+        'extraPlugins': ['justify', 'div', 'showblocks', 'autogrow', 'codesnippet'],
+        'removePlugins': ['resize'],
+        'allowedContent': True,
+        'toolbarCanCollapse': True,
+        'autoGrow_minHeight': 400,
+        'autoGrow_maxHeight': 800,
+        'codeSnippet_theme': 'monokai_sublime',
+    },
+    'fullscreen_ckeditor': {
+        'toolbar': 'AdvancedHTML',
+        'height': '80vh',
+        'width': '100%',
+        'toolbar_AdvancedHTML': [
+            ['Source', '-', 'Save', 'NewPage', 'Preview', 'Print', '-', 'Templates'],
+            ['Cut', 'Copy', 'Paste', 'PasteText', 'PasteFromWord', '-', 'Undo', 'Redo'],
+            ['Find', 'Replace', '-', 'SelectAll', '-', 'Scayt'],
+            ['Bold', 'Italic', 'Underline', 'Strike', 'Subscript', 'Superscript', '-', 'RemoveFormat'],
+            ['NumberedList', 'BulletedList', '-', 'Outdent', 'Indent', '-', 'Blockquote', 'CreateDiv', '-', 'JustifyLeft', 'JustifyCenter', 'JustifyRight', 'JustifyBlock'],
+            ['Link', 'Unlink', 'Anchor'],
+            ['Image', 'Flash', 'Table', 'HorizontalRule', 'Smiley', 'SpecialChar', 'PageBreak', 'Iframe'],
+            ['Styles', 'Format', 'Font', 'FontSize'],
+            ['TextColor', 'BGColor'],
+            ['Maximize', 'ShowBlocks', 'CodeSnippet', 'CodeMirror', 'Html5video', 'Html5audio', 'TableTools'],
+            ['SpellChecker', 'Language'],
+            ['Form', 'Checkbox', 'Radio', 'TextField', 'Textarea', 'Select', 'Button', 'ImageButton', 'HiddenField'],
+        ],
+        'extraPlugins': [
+            'justify', 'div', 'showblocks', 'autogrow', 'codesnippet', 'codemirror',
+            'html5video', 'html5audio', 'maximize', 'widget', 'dialog', 'dialogui',
+            'lineutils', 'clipboard', 'uploadimage', 'uploadwidget', 'image2', 'tabletools',
+            'tableresize', 'table', 'embed', 'embedsemantic'
+        ],
+        'removePlugins': ['resize', 'image'],
+        'allowedContent': True,
+        'toolbarCanCollapse': True,
+        'autoGrow_minHeight': 600,
+        'autoGrow_maxHeight': 0,  # 0 means no max height, grows to fill screen
+        'codeSnippet_theme': 'monokai_sublime',
+        'codemirror': {
+            'theme': 'monokai',
+            'lineNumbers': True,
+            'lineWrapping': True,
+            'matchBrackets': True,
+            'autoCloseTags': True,
+            'autoCloseBrackets': True,
+            'enableSearchTools': True,
+            'enableCodeCompletion': True,
+            'mode': 'htmlmixed',
+        },
+        'filebrowserUploadUrl': '/ckeditor/upload/',
+        'uploadUrl': '/ckeditor/upload/',
+        'contentsCss': ['/static/css/ckeditor_custom.css'],
+        'language': 'en',
+        'extraAllowedContent': 'audio[*];video[*];source[*];meta[*];link[*];noscript[*];svg[*];canvas[*]',
+        'protectedSource': [
+            r'<script[\s\S]*?</script>',
+            r'<style[\s\S]*?</style>',
+            r'<code[\s\S]*?</code>',
+            r'<noscript[\s\S]*?</noscript>',
+            r'<meta[\s\S]*?>',
+            r'<link[\s\S]*?>',
+            r'<svg[\s\S]*?</svg>',
+            r'<canvas[\s\S]*?</canvas>',
+        ],
+    },
+}
